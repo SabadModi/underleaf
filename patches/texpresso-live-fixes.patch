@@ -1,0 +1,41 @@
+diff --git a/src/engine/main/main.c b/src/engine/main/main.c
+index 333408e..c2c36b3 100644
+--- a/src/engine/main/main.c
++++ b/src/engine/main/main.c
+@@ -230,6 +230,19 @@ ttbc_input_handle_t *ttstub_input_open(const char *path,
+     char *ipath =
+       txp_open(texpresso, id, path, kind_of_ttbc_format(format), TXP_READ);
+ 
++    // underleaf patch: \input{chapter} asks for "chapter". Try "chapter.tex" through
++    // the driver as well; otherwise the fopen fallback below reads it untracked and
++    // edits to included files never re-render.
++    char ext_path[PATH_MAX + 1];
++    for (const char **exts = format_extensions(format); !ipath && *exts; exts++)
++    {
++      if (strlen(path) + strlen(*exts) > PATH_MAX)
++        break;
++      strcpy(ext_path, path);
++      strcat(ext_path, *exts);
++      ipath = txp_open(texpresso, id, ext_path, kind_of_ttbc_format(format), TXP_READ);
++    }
++
+     if (ipath)
+     {
+       strcpy(last_open, ipath);
+diff --git a/src/frontend/engine_tex.c b/src/frontend/engine_tex.c
+index 5866b1b..86e5aa9 100644
+--- a/src/frontend/engine_tex.c
++++ b/src/frontend/engine_tex.c
+@@ -1021,6 +1021,12 @@ static void rollback_processes(fz_context *ctx, struct tex_engine *self, int rev
+   while (self->process_count > 0 && get_process(self)->trace_len > trace)
+     pop_process(ctx, self);
+ 
++  // underleaf patch: a worker killed by process_pending_messages while still
++  // at the root position (trace 0) was never popped, and prepare_process only
++  // respawns when the stack is empty, so fast typing froze the preview.
++  while (self->process_count > 0 && get_process(self)->fd == -1)
++    pop_process(ctx, self);
++
+   int trace_len = self->process_count == 0 ? 0 : get_process(self)->trace_len;
+   while (reverted > trace_len)
+   {

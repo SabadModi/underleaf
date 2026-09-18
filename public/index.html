@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Underleaf</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2314171c'/%3E%3Cpath d='M9 23c0-9 6-14 15-15-1 9-6 15-15 15z' fill='%23d6a64f'/%3E%3Cpath d='M9 23l8-8' stroke='%2314171c' stroke-width='1.6'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/assets/main.css">
+</head>
+<body>
+<div id="app" class="app">
+  <header class="topbar">
+    <div class="brand" title="Underleaf">
+      <svg class="leaf" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19c0-8 5-12.5 14-13.5C18 13.5 13.5 19 5 19z"/><path class="vein" d="M5 19l7.5-7.5"/></svg>
+      <span class="wordmark">underleaf</span>
+    </div>
+    <nav class="crumb" aria-label="Current file">
+      <span id="project-name" class="project"></span>
+      <span class="slash">/</span>
+      <span id="file-name" class="file"></span>
+      <span id="save-state" class="save-state" data-state="saved">Saved</span>
+    </nav>
+    <div class="spacer"></div>
+    <div class="actions">
+      <button id="btn-review" class="btn review-btn" hidden title="Review the changes Claude made">
+        <span class="claude-mark" aria-hidden="true">✻</span>Review changes<span id="btn-review-count" class="count">0</span>
+      </button>
+      <button id="btn-compile" class="btn primary" title="Save and recompile (Ctrl+S)">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v2.8h-2.8"/></svg>Recompile
+      </button>
+      <button id="btn-live" class="btn live" hidden title="TeXpresso live preview: re-renders on every keystroke (Ctrl+Shift+L)">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9 1.5L3.5 9H8l-1 5.5L12.5 7H8z"/></svg>Live
+      </button>
+      <a id="btn-download" class="btn" title="Download the PDF">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m-3.5-3.5L8 10l3.5-3.5M3 13.5h10"/></svg>PDF
+      </a>
+      <button id="btn-claude" class="btn claude" title="Show or hide Claude Code (Ctrl+`)">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v13M1.5 8h13M3.4 3.4l9.2 9.2M12.6 3.4l-9.2 9.2"/></svg>Claude
+      </button>
+    </div>
+    <div id="win-controls" class="win-controls" hidden>
+      <button data-win="minimize" title="Minimize"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 8.5h7"/></svg></button>
+      <button data-win="maximize" title="Maximize or restore (or double-click the header)"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="4.5" width="7" height="7" rx="1"/></svg></button>
+      <button data-win="close" class="win-close" title="Close"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 5l6 6M11 5l-6 6"/></svg></button>
+    </div>
+  </header>
+
+  <main id="workspace" class="workspace">
+    <aside class="sidebar">
+      <div class="pane-head">
+        <span class="label">Files</span>
+        <button id="btn-new-file" class="icon-btn" title="New file">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
+        </button>
+      </div>
+      <div id="file-tree" class="file-tree" role="tree"></div>
+      <div class="keys">
+        <div><kbd>Ctrl</kbd><kbd>K</kbd> ask Claude</div>
+        <div><kbd>Ctrl</kbd><kbd>S</kbd> recompile</div>
+        <div><kbd>Alt</kbd><kbd>Enter</kbd> find in PDF</div>
+        <div><span class="dbl">double-click PDF</span> find in source</div>
+        <div><span class="dbl">select PDF text</span> ask · highlight</div>
+      </div>
+    </aside>
+    <div class="gutter col" data-resize="sidebar"></div>
+
+    <section id="left" class="left">
+      <div class="editor-wrap">
+        <div id="editor" class="editor"></div>
+        <div id="image-view" class="image-view" hidden></div>
+        <div id="review" class="review" hidden>
+          <header class="rv-head">
+            <span class="claude-mark" aria-hidden="true">✻</span>
+            <div class="rv-title"><strong id="rv-count"></strong> <span id="rv-files"></span></div>
+            <div class="spacer"></div>
+            <button id="rv-undo-all" class="btn small">Undo all</button>
+            <button id="rv-keep-all" class="btn small keep">Keep all</button>
+            <button id="rv-close" class="icon-btn" title="Back to the editor (Esc). The changes stay listed under Review."><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+          </header>
+          <div id="rv-list" class="rv-list"></div>
+        </div>
+      </div>
+      <div class="gutter row" data-resize="claude"></div>
+      <div class="claude-pane">
+        <div class="pane-head claude-head">
+          <span class="claude-mark" aria-hidden="true">✻</span>
+          <span id="claude-title" class="label">Claude Code</span>
+          <div class="chips">
+            <button id="chip-ask" class="chip" title="Ask about the selected lines (Ctrl+K)">Ask about selection</button>
+            <button id="chip-review" class="chip">Review this file</button>
+            <button id="chip-fix" class="chip" disabled>Fix build errors</button>
+          </div>
+          <div class="spacer"></div>
+          <button id="btn-term-restart" class="icon-btn" title="Start a new Claude session">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v2.8h-2.8"/></svg>
+          </button>
+          <button id="btn-term-close" class="icon-btn" title="Hide (Ctrl+`)">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+          </button>
+        </div>
+        <div id="terminal" class="terminal"></div>
+      </div>
+    </section>
+    <div class="gutter col" data-resize="preview"></div>
+
+    <section id="preview" class="preview">
+      <div class="pane-head preview-head">
+        <span id="compile-status" class="compile-status" data-kind="idle"><i></i><span id="compile-text">Starting…</span></span>
+        <button id="btn-issues" class="issues-chip" hidden></button>
+        <div id="hl-group" class="hl-group" hidden>
+          <button id="hl-ask" class="hl-chip" title="Ask Claude about your highlights"><span class="hl-swatch"></span><span id="hl-count">0 highlights</span></button>
+          <button id="hl-clear" class="hl-clear" title="Remove all highlights"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
+        </div>
+        <div class="spacer"></div>
+        <button id="btn-link" class="link-toggle" aria-pressed="false" title="Scroll the LaTeX along with the PDF (and the PDF along with the LaTeX)">
+          <span class="switch" aria-hidden="true"><span class="knob"></span></span>Link scroll
+        </button>
+        <button id="btn-sync" class="icon-btn" title="Show the cursor's line in the PDF (Alt+Enter)">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h10m-3.5-3.5L12 8l-3.5 3.5M14 3v10"/></svg>
+        </button>
+        <span id="page-indicator" class="page-indicator"></span>
+        <div class="zoom">
+          <button id="zoom-out" class="icon-btn" title="Zoom out"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10"/></svg></button>
+          <button id="zoom-label" class="zoom-label" title="Fit to width">Fit</button>
+          <button id="zoom-in" class="icon-btn" title="Zoom in"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>
+        </div>
+      </div>
+      <div class="leaf-progress" aria-hidden="true"></div>
+      <div id="pdf" class="pdf-scroll">
+        <div id="pdf-pages" class="pdf-pages"></div>
+        <div id="pdf-empty" class="pdf-empty">
+          <svg class="leaf big" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19c0-8 5-12.5 14-13.5C18 13.5 13.5 19 5 19z"/><path class="vein" d="M5 19l7.5-7.5"/></svg>
+          <p id="pdf-empty-text">Setting the first proof…</p>
+        </div>
+      </div>
+      <div id="live-dock" class="live-dock" hidden>
+        <p><strong>Starting live preview…</strong></p>
+        <p>TeXpresso's window docks over this panel and re-renders as you type. Click in it to jump to that line in the source. <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>L</kbd> switches back to the PDF.</p>
+      </div>
+      <div id="issues-panel" class="issues-panel" hidden>
+        <div class="issues-head">
+          <span id="issues-title">No errors or warnings</span>
+          <div class="spacer"></div>
+          <button id="issues-fix" class="btn claude small">Fix with Claude</button>
+          <button id="raw-toggle" class="btn small">Raw log</button>
+          <button id="issues-close" class="icon-btn" title="Close (Esc)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+        </div>
+        <div id="issues-list" class="issues-list"></div>
+        <pre id="raw-log" class="raw-log" hidden></pre>
+      </div>
+    </section>
+  </main>
+
+  <div class="offline-banner">Lost connection to Underleaf. Reconnecting…</div>
+</div>
+
+<div id="ask" class="ask" hidden>
+  <div class="ask-top"><span class="claude-mark" aria-hidden="true">✻</span><span id="ask-context" class="ask-context"></span></div>
+  <input id="ask-input" class="ask-input" type="text" placeholder="Ask Claude to change or explain this…" autocomplete="off" spellcheck="false">
+  <div class="ask-hint"><kbd>Enter</kbd> send to Claude Code · <kbd>Esc</kbd> cancel</div>
+</div>
+<div id="pdf-tools" class="pdf-tools" hidden>
+  <button id="pt-ask" class="pt-btn pt-ask"><span class="claude-mark" aria-hidden="true">✻</span>Ask Claude</button>
+  <button id="pt-mark" class="pt-btn"><span class="hl-swatch"></span>Highlight</button>
+  <button id="pt-source" class="pt-btn">Go to source</button>
+  <button id="pt-remove" class="pt-btn" hidden>Remove</button>
+</div>
+<div id="toasts" class="toasts"></div>
+<script type="module" src="/assets/main.js"></script>
+</body>
+</html>

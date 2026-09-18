@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# underleaf [project-folder | file.tex] [--keep] [--no-open] [--port N]
+# Opens a local Overleaf-style editor for the project (defaults to the current folder).
+set -euo pipefail
+APP_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+
+NODE="${UNDERLEAF_NODE:-}"
+if [[ -z "$NODE" ]]; then
+  NODE="$(command -v node || true)"
+  if [[ -z "$NODE" ]]; then
+    # launched from a desktop entry without the shell's PATH: fall back to nvm's newest node
+    NODE="$(ls -d "$HOME"/.nvm/versions/node/*/bin/node 2>/dev/null | sort -V | tail -1 || true)"
+  fi
+fi
+[[ -x "$NODE" ]] || { echo "underleaf: node not found" >&2; exit 1; }
+export PATH="$(dirname "$NODE"):$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+if [[ $# -eq 0 && ! -t 0 ]] && command -v zenity >/dev/null; then
+  # desktop launch: ask which project to open
+  DIR="$(zenity --file-selection --directory --title='Open a LaTeX project folder' 2>/dev/null || true)"
+  [[ -n "$DIR" ]] || exit 0
+  set -- "$DIR"
+fi
+
+if [[ ! -f "$APP_DIR/public/assets/main.js" ]]; then
+  (cd "$APP_DIR" && "$NODE" build.mjs >/dev/null)
+fi
+exec "$NODE" "$APP_DIR/server.js" "$@"

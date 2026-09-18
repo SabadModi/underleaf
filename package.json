@@ -1,0 +1,63 @@
+{
+  "name": "underleaf",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local Overleaf: LaTeX editor with live PDF preview and Claude Code built in",
+  "license": "MIT",
+  "author": "Sabad Modi",
+  "homepage": "https://github.com/SabadModi/underleaf",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SabadModi/underleaf.git"
+  },
+  "keywords": [
+    "latex",
+    "overleaf",
+    "tectonic",
+    "texpresso",
+    "pdf",
+    "editor",
+    "claude",
+    "claude-code"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "underleaf": "bin/underleaf"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node server.js",
+    "postinstall": "node build.mjs",
+    "setup": "bash scripts/install.sh",
+    "texpresso": "bash scripts/build-texpresso.sh"
+  },
+  "dependencies": {
+    "chokidar": "^5.0.0",
+    "node-pty": "^1.1.0",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/legacy-modes": "^6.5.4",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/merge": "^6.12.2",
+    "@codemirror/search": "^6.7.2",
+    "@codemirror/state": "^6.7.5",
+    "@codemirror/view": "^6.43.12",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource/ibm-plex-sans": "^5.3.0",
+    "@fontsource/newsreader": "^5.3.0",
+    "@lezer/highlight": "^1.2.3",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "codemirror": "^6.0.2",
+    "esbuild": "^0.28.2",
+    "pdfjs-dist": "^5.6.205"
+  }
+}
