@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { watch } from 'chokidar';
 import pty from 'node-pty';
+import { isMarkdown, buildMarkdown } from './lib/markdown.js';
 
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(APP_DIR, 'public');
@@ -39,13 +40,28 @@ const TEMPLATE = String.raw`\documentclass[11pt]{article}
 \maketitle
 
 \section{Introduction}
-Start writing here. Select some text and press \texttt{Ctrl+K} to ask Claude about it.
+Start writing here. Select some text and press \texttt{Ctrl+K} to ask about it.
 
 \begin{equation}
   e^{i\pi} + 1 = 0
 \end{equation}
 
 \end{document}
+`;
+
+const TEMPLATE_MD = `---
+title: Untitled
+author: ""
+date: \\today
+---
+
+# Introduction
+
+Start writing here. Select some text and press \`Ctrl+K\` to ask about it.
+
+$$
+e^{i\\pi} + 1 = 0
+$$
 `;
 
 // `underleaf ~/My Papers/thesis` without quotes arrives as several arguments, and a path copied
@@ -67,10 +83,10 @@ function resolveProject(target) {
     console.error(`underleaf: ${what}: ${abs}\nIf the path contains spaces, put it in quotes: underleaf "${abs}"`);
     process.exit(1);
   };
-  if (abs.endsWith('.tex')) {
+  if (abs.endsWith('.tex') || isMarkdown(abs)) {
     if (!fs.existsSync(abs)) {
       if (!fs.existsSync(path.dirname(abs))) fail('no such folder for the new file');
-      fs.writeFileSync(abs, TEMPLATE);
+      fs.writeFileSync(abs, abs.endsWith('.tex') ? TEMPLATE : TEMPLATE_MD);
     }
     main = path.basename(abs);
     abs = path.dirname(abs);
@@ -104,14 +120,30 @@ function which(name, extra = []) {
   return null;
 }
 const TECTONIC = process.env.UNDERLEAF_TECTONIC || which('tectonic', [path.join(os.homedir(), '.cargo/bin')]);
-const CLAUDE = process.env.UNDERLEAF_CLAUDE || which('claude', [path.join(os.homedir(), '.claude/local')]);
+const PANDOC = process.env.UNDERLEAF_PANDOC || which('pandoc');
 const TEXPRESSO = process.env.UNDERLEAF_TEXPRESSO || which('texpresso', [path.join(DATA_DIR, 'deps/texpresso/build')]);
 const XPROP = process.env.DISPLAY ? which('xprop') : null;
+
+// The coding agents the terminal panel can run; the switch in its header picks one.
+const AGENTS = {
+  claude: {
+    name: 'Claude', title: 'Claude Code', command: 'claude',
+    path: process.env.UNDERLEAF_CLAUDE || which('claude', [path.join(os.homedir(), '.claude/local')]),
+    args: (note) => ['--append-system-prompt', note],
+  },
+  codex: {
+    name: 'Codex', title: 'Codex', command: 'codex',
+    path: process.env.UNDERLEAF_CODEX || which('codex'),
+    // Codex has no --append-system-prompt. -c values are TOML, and a JSON string is a valid TOML string.
+    // Its update check opens a modal with "Update now" preselected, and sendToClaude presses Enter blindly.
+    args: (note) => ['-c', `developer_instructions=${JSON.stringify(note)}`, '-c', 'check_for_update_on_startup=false'],
+  },
+};
 
 // ---------------------------------------------------------------- files
 
 const TEXT_EXT = new Set(['.tex', '.ltx', '.bib', '.sty', '.cls', '.bst', '.bbx', '.cbx', '.lbx', '.cfg', '.def', '.clo',
-  '.dtx', '.ins', '.tikz', '.pgf', '.txt', '.md', '.csv', '.dat', '.json', '.yaml', '.yml', '.py', '.m', '.gitignore']);
+  '.dtx', '.ins', '.tikz', '.pgf', '.txt', '.md', '.markdown', '.csv', '.dat', '.json', '.yaml', '.yml', '.py', '.m', '.gitignore']);
 const BUILD_EXT = new Set([...TEXT_EXT, '.png', '.jpg', '.jpeg', '.pdf', '.eps', '.svg', '.otf', '.ttf']);
 const SKIP_DIRS = new Set(['node_modules', '__pycache__', '.git', '.underleaf']);
 
@@ -149,7 +181,10 @@ function pickMain(files) {
   const withClass = tex
     .filter((f) => { try { return /\\documentclass/.test(fs.readFileSync(inRoot(f), 'utf8')); } catch { return false; } })
     .sort((a, b) => a.split('/').length - b.split('/').length);
-  return withClass[0] || tex[0] || null;
+  if (tex.length) return withClass[0] || tex[0];
+  // No LaTeX at all: a folder of Markdown compiles one of its .md files rather than gaining a main.tex.
+  const md = files.filter(isMarkdown).sort((a, b) => a.split('/').length - b.split('/').length);
+  return ['main.md', 'index.md'].find((f) => md.includes(f)) || md[0] || null;
 }
 
 // Content we believe is on disk, plus our own recent writes, so watcher echoes are ignored.
@@ -194,17 +229,23 @@ function broadcast(msg) {
 const compile = { running: false, pending: false, timer: null, version: 0, last: null, child: null };
 const outBase = () => path.join(BUILD, path.basename(MAIN, path.extname(MAIN)));
 const pdfPath = () => outBase() + '.pdf';
+// With a Markdown main: the LaTeX pandoc generates, and the line map of the build that made the PDF on screen.
+const mdTexPath = () => outBase() + '.tex';
+let mdMap = null;
 
 function scheduleCompile(delay = 150) {
   clearTimeout(compile.timer);
   compile.timer = setTimeout(runCompile, delay);
 }
 
-function runCompile() {
+async function runCompile() {
   if (!MAIN) return;
   if (compile.running) { compile.pending = true; return; }
-  if (!TECTONIC) {
-    compile.last = { ok: false, ms: 0, errors: [{ severity: 'error', message: 'tectonic was not found on PATH. Install it from https://tectonic-typesetting.github.io' }], warnings: [] };
+  const missing = !TECTONIC ? 'tectonic was not found on PATH. Install it from https://tectonic-typesetting.github.io'
+    : isMarkdown(MAIN) && !PANDOC ? 'pandoc was not found on PATH. Underleaf needs it to turn Markdown into LaTeX: install it from https://pandoc.org/installing.html (on Ubuntu: sudo apt install pandoc)'
+      : null;
+  if (missing) {
+    compile.last = { ok: false, ms: 0, errors: [{ severity: 'error', message: missing }], warnings: [] };
     broadcast({ type: 'compile-done', ...compile.last, version: compile.version });
     return;
   }
@@ -212,9 +253,21 @@ function runCompile() {
   compile.pending = false;
   broadcast({ type: 'compile-start' });
   const t0 = Date.now();
+  let input = MAIN;
+  const search = [];
+  let md = null;
+  if (isMarkdown(MAIN)) {
+    const main = MAIN;
+    md = await buildMarkdown(PANDOC, { src: inRoot(MAIN), file: MAIN, out: mdTexPath(), buildDir: BUILD });
+    if (MAIN !== main) { compile.running = false; return runCompile(); } // switched main file meanwhile
+    if (!md.ok) return finishCompile({ ok: false, ms: Date.now() - t0, errors: md.errors, warnings: md.warnings, rawOutput: md.output.slice(-20000) }, false);
+    // The generated LaTeX lives in .underleaf/: let Tectonic find images and \input files next to the .md.
+    input = rel(mdTexPath());
+    for (const dir of new Set([path.dirname(inRoot(MAIN)), ROOT])) search.push('-Z', `search-path=${dir}`);
+  }
   let before = 0;
   try { before = fs.statSync(pdfPath()).mtimeMs; } catch {}
-  const args = ['-X', 'compile', '--keep-intermediates', '--keep-logs', '--synctex', '-Z', 'continue-on-errors', '--outdir', BUILD, MAIN];
+  const args = ['-X', 'compile', '--keep-intermediates', '--keep-logs', '--synctex', '-Z', 'continue-on-errors', ...search, '--outdir', BUILD, input];
   const child = spawn(TECTONIC, args, { cwd: ROOT, env: process.env });
   compile.child = child;
   child.on('error', (err) => { output += `error: could not run tectonic: ${err.message}\n`; });
@@ -237,18 +290,23 @@ function runCompile() {
     let after = 0;
     try { after = fs.statSync(pdfPath()).mtimeMs; } catch {}
     const newPdf = after > before;
-    if (newPdf) { compile.version++; synctexCache = null; }
-    const errors = parseTectonicErrors(output);
+    if (newPdf) { compile.version++; synctexCache = null; mdMap = md?.map ?? null; }
+    const errors = parseTectonicErrors(output, md?.map);
     if (code !== 0 && errors.length === 0) {
       errors.push({ severity: 'error', message: output.trim().split('\n').filter((l) => !l.startsWith('note:')).slice(-6).join('\n') || `tectonic exited with code ${code}` });
     }
-    const warnings = parseLogWarnings();
-    compile.last = { ok: code === 0 && errors.length === 0, ms, errors, warnings, rawOutput: output.slice(-20000) };
-    writeErrorSummary(errors, warnings);
-    broadcast({ type: 'compile-done', ...compile.last, version: compile.version, newPdf });
-    compile.running = false;
-    if (compile.pending) scheduleCompile(0);
+    const warnings = [...(md?.warnings ?? []), ...parseLogWarnings(md?.map)];
+    const raw = (md?.output ?? '') + output;
+    finishCompile({ ok: code === 0 && errors.length === 0, ms, errors, warnings, rawOutput: raw.slice(-20000) }, newPdf);
   });
+}
+
+function finishCompile(result, newPdf) {
+  compile.last = result;
+  writeErrorSummary(result.errors, result.warnings);
+  broadcast({ type: 'compile-done', ...compile.last, version: compile.version, newPdf });
+  compile.running = false;
+  if (compile.pending) scheduleCompile(0);
 }
 
 function projectFileFor(name) {
@@ -263,7 +321,13 @@ function projectFileFor(name) {
   return null;
 }
 
-function parseTectonicErrors(output) {
+// Where a build message points in the project. With a Markdown main, the generated LaTeX stands for the .md.
+function sourceFor(name, line, map) {
+  if (isMarkdown(MAIN) && name && path.basename(name) === path.basename(mdTexPath())) return { file: MAIN, line: line && map ? map.toMd(line) : null };
+  return { file: projectFileFor(name), line };
+}
+
+function parseTectonicErrors(output, map) {
   const seen = new Set();
   const list = [];
   for (const line of output.split('\n')) {
@@ -273,7 +337,7 @@ function parseTectonicErrors(output) {
       if (seen.has(key)) continue;
       seen.add(key);
       if (m[1] === 'warning') continue; // warnings come from the log, with better text
-      list.push({ severity: 'error', file: projectFileFor(m[2]), rawFile: m[2], line: +m[3], message: m[4].replace(/^! /, '') });
+      list.push({ severity: 'error', ...sourceFor(m[2], +m[3], map), rawFile: m[2], message: m[4].replace(/^! /, '') });
       continue;
     }
     m = line.match(/^error: (.*)$/);
@@ -286,7 +350,7 @@ function parseTectonicErrors(output) {
 }
 
 // Light LaTeX log parser: tracks the "(file" / ")" stack to attribute warnings to source files.
-function parseLogWarnings() {
+function parseLogWarnings(map) {
   let log;
   try { log = fs.readFileSync(outBase() + '.log', 'utf8'); } catch { return []; }
   const lines = log.split('\n');
@@ -317,12 +381,14 @@ function parseLogWarnings() {
     while (k < lines.length && lines[k].trim() !== '' && /^\(\S+\)\s/.test(lines[k])) { msg += ' ' + lines[k].replace(/^\(\S+\)\s+/, ''); k++; }
     const lineNo = msg.match(/on input line (\d+)/);
     const current = [...stack].reverse().find((f) => f && /\.(tex|ltx)$/.test(f));
-    const file = projectFileFor(current ? current.replace(/^\.\//, '') : MAIN) || MAIN;
+    const name = current ? current.replace(/^\.\//, '') : isMarkdown(MAIN) ? mdTexPath() : MAIN;
+    const src = sourceFor(name, lineNo ? +lineNo[1] : null, map);
+    const file = src.file || MAIN;
     const text = (w[1] ? `${w[1]}: ` : '') + msg.replace(/\s+/g, ' ').trim();
-    const key = `${file}|${lineNo?.[1]}|${text}`;
+    const key = `${file}|${src.line}|${text}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ severity: 'warning', file: lineNo ? file : null, line: lineNo ? +lineNo[1] : null, message: text });
+    out.push({ severity: 'warning', file: src.line ? file : null, line: src.line || null, message: text });
     if (out.length > 200) break;
   }
   return out;
@@ -395,6 +461,16 @@ function loadSynctex() {
   return synctexCache;
 }
 
+// With a Markdown main, SyncTeX speaks of the generated LaTeX: translate to and from lines of the .md.
+function toSource(hit) {
+  if (!isMarkdown(MAIN) || hit.path !== rel(mdTexPath())) return hit;
+  return mdMap ? { path: MAIN, line: mdMap.toMd(hit.line) } : null;
+}
+function fromSource(file, line) {
+  if (!isMarkdown(MAIN) || file !== MAIN) return { file, line };
+  return mdMap ? { file: rel(mdTexPath()), line: mdMap.toTex(line) } : { file: null };
+}
+
 function tagInProject(sx, tag) {
   const abs = sx.inputs.get(tag);
   return abs && (abs === ROOT || abs.startsWith(ROOT + path.sep)) ? abs : null;
@@ -426,7 +502,7 @@ function syncBackward(page, px, py) {
     }
   }
   const hit = best || box;
-  return { path: rel(tagInProject(sx, hit.tag)), line: hit.line };
+  return toSource({ path: rel(tagInProject(sx, hit.tag)), line: hit.line });
 }
 
 // Linked scrolling, PDF -> source: the text line `frac` of the way through the page's lines
@@ -436,10 +512,12 @@ function linkFromPdf(page, frac) {
   const boxes = (sx.lineBoxes[page] || []).filter((r) => r.line > 0 && r.w > 0 && tagInProject(sx, r.tag));
   if (!boxes.length) return null;
   const r = boxes[Math.min(boxes.length - 1, Math.floor(frac * boxes.length))];
-  return { path: rel(tagInProject(sx, r.tag)), line: r.line };
+  return toSource({ path: rel(tagInProject(sx, r.tag)), line: r.line });
 }
 
 function syncForward(file, line) {
+  ({ file, line } = fromSource(file, line));
+  if (!file) return null;
   const sx = loadSynctex();
   const target = inRoot(file);
   const tags = [...sx.inputs].filter(([, abs]) => abs === target).map(([t]) => t);
@@ -463,18 +541,26 @@ function syncForward(file, line) {
   return { page, x: left, y: top, h: Math.max(bottom - top, 10) };
 }
 
-// ---------------------------------------------------------------- claude code terminal
+// ---------------------------------------------------------------- agent terminal
 
-const CLAUDE_NOTE = () => [
+const AGENT_NOTE = () => [
   'You are running inside Underleaf, a local Overleaf-style LaTeX editor.',
-  `The project root is the current directory and the main LaTeX file is ${MAIN}.`,
-  'The user sees the LaTeX source on the left and the compiled PDF on the right.',
+  isMarkdown(MAIN)
+    ? `The project root is the current directory and the main document is ${MAIN}, written in Markdown: Underleaf converts it to LaTeX with pandoc and compiles that. Edit ${MAIN}; ${rel(mdTexPath())} is generated and overwritten on every build.`
+    : `The project root is the current directory and the main LaTeX file is ${MAIN}.`,
+  'The user sees the source on the left and the compiled PDF on the right.',
   'Any file you edit on disk is reloaded into their editor instantly and the project is recompiled automatically with Tectonic (XeTeX), so you normally do not need to compile yourself.',
   'After a build, .underleaf/errors.txt holds a summary of errors and warnings and .underleaf/*.log holds the full TeX log. Never delete the .underleaf directory.',
   'When the user refers to "lines N-M" they mean line numbers in the editor (1-based). Prefer small, targeted edits that keep their formatting.',
 ].join(' ');
 
-const term = { proc: null, buffer: '', cols: 100, rows: 30 };
+// One session per agent: switching away leaves the other running, with its conversation intact.
+const term = {
+  agent: AGENTS[state.agent]?.path ? state.agent : Object.keys(AGENTS).find((id) => AGENTS[id].path) || 'claude',
+  sessions: Object.fromEntries(Object.keys(AGENTS).map((id) => [id, { proc: null, buffer: '' }])),
+  cols: 100, rows: 30,
+};
+const activeSession = () => term.sessions[term.agent];
 
 function childEnv() {
   const env = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
@@ -485,35 +571,53 @@ function childEnv() {
 }
 
 function startTerminal(extraArgs = []) {
-  if (term.proc) return;
-  term.buffer = '';
+  const id = term.agent;
+  const agent = AGENTS[id];
+  const session = term.sessions[id];
+  if (session.proc) return;
+  session.buffer = '';
   let file, args;
-  if (CLAUDE) {
-    file = CLAUDE;
-    args = ['--append-system-prompt', CLAUDE_NOTE(), ...extraArgs];
+  if (agent.path) {
+    file = agent.path;
+    args = [...agent.args(AGENT_NOTE()), ...extraArgs];
   } else {
     file = process.env.SHELL || '/bin/bash';
     args = [];
-    term.buffer = '\x1b[33mclaude was not found on PATH — starting a shell instead.\x1b[0m\r\n';
+    session.buffer = `\x1b[33m${agent.command} was not found on PATH — starting a shell instead.\x1b[0m\r\n`;
   }
   try {
-    term.proc = pty.spawn(file, args, { name: 'xterm-256color', cols: term.cols, rows: term.rows, cwd: ROOT, env: childEnv() });
+    session.proc = pty.spawn(file, args, { name: 'xterm-256color', cols: term.cols, rows: term.rows, cwd: ROOT, env: childEnv() });
   } catch (err) {
     broadcast({ type: 'term-out', data: `\r\n\x1b[31mCould not start ${file}: ${err.message}\x1b[0m\r\n` });
     return;
   }
-  const proc = term.proc;
+  const proc = session.proc;
   proc.onData((d) => {
-    term.buffer += d;
-    if (term.buffer.length > 400_000) term.buffer = term.buffer.slice(-250_000);
-    broadcast({ type: 'term-out', data: d });
+    session.buffer += d;
+    if (session.buffer.length > 400_000) session.buffer = session.buffer.slice(-250_000);
+    if (term.agent === id) broadcast({ type: 'term-out', data: d });
   });
   proc.onExit(({ exitCode }) => {
-    if (term.proc !== proc) return;
-    term.proc = null;
-    broadcast({ type: 'term-exit', code: exitCode });
+    if (session.proc !== proc) return;
+    session.proc = null;
+    if (term.agent === id) broadcast({ type: 'term-exit', code: exitCode });
   });
   broadcast({ type: 'term-started' });
+}
+
+function switchAgent(id) {
+  if (id === term.agent || !AGENTS[id]?.path) return;
+  term.agent = state.agent = id;
+  saveState();
+  broadcast({ type: 'agent', agent: id });
+  const session = activeSession();
+  if (session.proc) {
+    broadcast({ type: 'term-replay', data: session.buffer });
+    try { session.proc.resize(term.cols, term.rows); } catch {}
+  } else {
+    broadcast({ type: 'term-reset' });
+    startTerminal();
+  }
 }
 
 // ---------------------------------------------------------------- texpresso live window
@@ -805,9 +909,11 @@ async function handle(m, reply, ws) {
     case 'hello':
       reply({
         type: 'init', root: ROOT, name: path.basename(ROOT), files, main: MAIN,
-        texpresso: !!TEXPRESSO, claude: !!CLAUDE, tectonic: !!TECTONIC,
+        texpresso: !!TEXPRESSO, tectonic: !!TECTONIC,
+        agents: Object.entries(AGENTS).map(([id, a]) => ({ id, name: a.name, title: a.title, command: a.command, found: !!a.path })),
+        agent: term.agent,
         compile: compile.last && { ...compile.last, version: compile.version }, compiling: compile.running,
-        live: !!live.proc, terminalRunning: !!term.proc,
+        live: !!live.proc, terminalRunning: !!activeSession().proc,
       });
       break;
     case 'open': {
@@ -844,6 +950,7 @@ async function handle(m, reply, ws) {
       state.main = MAIN;
       saveState();
       synctexCache = null;
+      mdMap = null;
       broadcast({ type: 'files', files, main: MAIN });
       if (live.proc) { stopLive(); }
       scheduleCompile(0);
@@ -894,26 +1001,33 @@ async function handle(m, reply, ws) {
     case 'term-start':
       term.cols = m.cols || term.cols;
       term.rows = m.rows || term.rows;
-      if (term.proc) {
-        term.proc.resize(term.cols, term.rows);
-        reply({ type: 'term-replay', data: term.buffer });
+      if (activeSession().proc) {
+        activeSession().proc.resize(term.cols, term.rows);
+        reply({ type: 'term-replay', data: activeSession().buffer });
       } else {
         startTerminal(m.args || []);
       }
       break;
-    case 'term-restart':
-      if (term.proc) { const p = term.proc; term.proc = null; p.kill(); }
+    case 'term-restart': {
+      const session = activeSession();
+      if (session.proc) { const p = session.proc; session.proc = null; p.kill(); }
       broadcast({ type: 'term-reset' });
       startTerminal(m.args || []);
       break;
+    }
+    case 'term-switch':
+      switchAgent(m.agent);
+      break;
     case 'term-in':
-      term.proc?.write(m.data);
+      activeSession().proc?.write(m.data);
       break;
     case 'term-resize':
       term.cols = m.cols; term.rows = m.rows;
-      try { term.proc?.resize(m.cols, m.rows); } catch {}
+      try { activeSession().proc?.resize(m.cols, m.rows); } catch {}
       break;
     case 'live-start':
+      // TeXpresso reads LaTeX only; a Markdown main has no live mode.
+      if (isMarkdown(MAIN)) { reply({ type: 'live-state', running: false }); break; }
       live.rect = m.rect || live.rect;
       startLive(m.docs || []);
       break;
@@ -942,7 +1056,7 @@ async function handle(m, reply, ws) {
 
 function shutdown() {
   stopLive();
-  try { term.proc?.kill(); } catch {}
+  for (const session of Object.values(term.sessions)) { try { session.proc?.kill(); } catch {} }
   compile.child?.kill('SIGKILL');
   watcher.close();
   server.close();
@@ -972,8 +1086,9 @@ server.listen(requestedPort, '127.0.0.1', () => {
   console.log(`Underleaf · ${ROOT}`);
   console.log(`  main file   ${MAIN}`);
   console.log(`  tectonic    ${TECTONIC || 'not found'}`);
+  console.log(`  pandoc      ${PANDOC || 'not found (Markdown main files off)'}`);
   console.log(`  texpresso   ${TEXPRESSO || 'not found (live mode off)'}`);
-  console.log(`  claude      ${CLAUDE || 'not found'}`);
+  for (const a of Object.values(AGENTS)) console.log(`  ${a.command.padEnd(11)} ${a.path || 'not found'}`);
   console.log(`  open        ${url}`);
   if (!flag('--no-open')) openWindow(url);
   scheduleCompile(0);

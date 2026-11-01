@@ -12,6 +12,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { latexLanguage, latexHighlight, editorTheme, latexCompletions, scanLabels, scanBib } from './latex.js';
+import { markdownSupport } from './markdown.js';
 import { PdfView } from './pdfview.js';
 import { PdfMarks, readPdfSelection } from './pdfmarks.js';
 import { computeChanges, keepChange, undoChange, describe, sectionAt, markedText, excerpts } from './review.js';
@@ -20,6 +21,7 @@ const $ = (id) => document.getElementById(id);
 const token = new URLSearchParams(location.search).get('t');
 const External = Annotation.define();
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const isMarkdown = (p) => /\.(md|markdown)$/i.test(p || '');
 const store = {
   get(k, d) { try { const v = localStorage.getItem('underleaf:' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('underleaf:' + k, JSON.stringify(v)); } catch {} },
@@ -34,6 +36,7 @@ const app = {
   reviewGroups: [], lastTyped: 0,
   texpresso: false, live: false, liveSending: false, resumeLive: false, lastTermOut: 0,
   claudeOpen: store.get('claudeOpen', true), terminalStarted: false, terminalStartedAt: 0, terminalExited: false,
+  agents: [], agent: null,
 };
 
 // ------------------------------------------------------------------ connection
@@ -151,7 +154,7 @@ function makeState(path, content) {
       bracketMatching(), closeBrackets(), rectangularSelection(), crosshairCursor(), highlightActiveLine(),
       highlightSelectionMatches(), lintGutter(), search({ top: false }), EditorView.lineWrapping, indentUnit.of('  '),
       autocompletion({ override: isTex ? [latexCompletions(completionContext)] : [], icons: false }),
-      isTex ? [latexLanguage, latexHighlight] : [],
+      isTex ? [latexLanguage, latexHighlight] : isMarkdown(path) ? markdownSupport : [],
       editorTheme, flashField, reviewMarks,
       keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, ...completionKeymap, indentWithTab]),
       EditorView.updateListener.of((u) => onEditorUpdate(path, u)),
@@ -707,7 +710,7 @@ const ICON = {
   tex: '<svg viewBox="0 0 16 16"><path d="M4 1.5h5.5L13 5v9.5H4z" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 8.5h5M6 11h3.5" stroke="currentColor" stroke-width="1.2"/></svg>',
   folder: '<svg viewBox="0 0 16 16"><path d="M5.5 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
 };
-const fileKind = (p) => (/\.(tex|ltx)$/i.test(p) ? 'tex' : /\.bib$/i.test(p) ? 'bib' : /\.(png|jpe?g|pdf|svg|eps|gif)$/i.test(p) ? 'img' : /\.(sty|cls)$/i.test(p) ? 'sty' : 'other');
+const fileKind = (p) => (/\.(tex|ltx)$/i.test(p) ? 'tex' : isMarkdown(p) ? 'md' : /\.bib$/i.test(p) ? 'bib' : /\.(png|jpe?g|pdf|svg|eps|gif)$/i.test(p) ? 'img' : /\.(sty|cls)$/i.test(p) ? 'sty' : 'other');
 
 function renderTree() {
   const tree = { dirs: new Map(), files: [] };
@@ -747,7 +750,7 @@ function renderTree() {
       row.tabIndex = 0;
       row.innerHTML = `<span class="ficon">${ICON.tex}</span><span class="tree-name">${escapeHtml(name)}</span>` +
         (f === app.main ? '<span class="main-badge" title="Compiled as the main document">main</span>'
-          : kind === 'tex' ? '<button class="set-main" title="Compile this file as the main document">set main</button>' : '');
+          : kind === 'tex' || kind === 'md' ? '<button class="set-main" title="Compile this file as the main document">set main</button>' : '');
       row.onclick = (e) => {
         if (e.target.closest('.set-main')) { send({ type: 'set-main', path: f }); return; }
         openFile(f);
@@ -764,6 +767,7 @@ handlers.files = (m) => {
   const mainChanged = app.main !== m.main;
   app.main = m.main;
   renderTree();
+  showLiveButton();
   if (mainChanged) {
     app.pdfVersion = -1;
     pdfView.clear();
@@ -1001,8 +1005,11 @@ function dockRect() {
   const top = Math.max(0, window.outerHeight - window.innerHeight - side);
   return { x: (window.screenX + side + r.left) * dpr, y: (window.screenY + top + r.top) * dpr, w: r.width * dpr, h: r.height * dpr };
 }
+// TeXpresso reads LaTeX only: no live mode while a Markdown file is the main document.
+const liveAvailable = () => app.texpresso && !isMarkdown(app.main);
+function showLiveButton() { $('btn-live').hidden = !liveAvailable(); }
 function startLive() {
-  if (app.liveSending || !app.texpresso) return;
+  if (app.liveSending || !liveAvailable()) return;
   flushSaves();
   const docs = [];
   for (const [path, d] of app.docs) {
@@ -1050,7 +1057,42 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-// ------------------------------------------------------------------ Claude Code terminal
+// ------------------------------------------------------------------ agent terminal (Claude Code or Codex)
+
+// Every label in index.html that names the agent. Collected here, before any document loads,
+// so the user's own text can never be caught up in the renaming.
+const agentLabels = [];
+const agentLabel = (text, agent) => text.replaceAll('Claude Code', agent.title).replaceAll('Claude', agent.name);
+for (const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); walk.nextNode();) {
+  const node = walk.currentNode, text = node.nodeValue;
+  if (text.includes('Claude')) agentLabels.push((agent) => { node.nodeValue = agentLabel(text, agent); });
+}
+for (const attr of ['title', 'placeholder']) {
+  for (const el of document.querySelectorAll(`[${attr}*="Claude"]`)) {
+    const text = el.getAttribute(attr);
+    agentLabels.push((agent) => el.setAttribute(attr, agentLabel(text, agent)));
+  }
+}
+
+const currentAgent = () => app.agents.find((a) => a.id === app.agent);
+
+function renderAgent() {
+  for (const apply of agentLabels) apply(currentAgent());
+  const anyFound = app.agents.some((a) => a.found);
+  $('claude-title').hidden = anyFound;
+  $('agent-switch').hidden = !anyFound;
+  $('agent-switch').replaceChildren(...app.agents.map((a) => {
+    const on = a.id === app.agent;
+    const b = document.createElement('button');
+    b.textContent = a.title;
+    b.disabled = !a.found;
+    b.title = !a.found ? `${a.command} was not found on PATH` : on ? `${a.title} is running in this panel` : `Switch to ${a.title}; this session keeps running`;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', on);
+    b.onclick = () => { if (!on) send({ type: 'term-switch', agent: a.id }); term.focus(); };
+    return b;
+  }));
+}
 
 const term = new Terminal({
   fontFamily: '"JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace',
@@ -1067,12 +1109,15 @@ term.loadAddon(fitAddon);
 term.loadAddon(new WebLinksAddon((_e, uri) => window.open(uri, '_blank')));
 
 let termOpened = false;
+// A replay contains the terminal queries the agent made at startup; xterm must not answer them again as typed input.
+let replaying = false;
 async function ensureTerminal() {
   if (!termOpened) {
     try { await document.fonts.load('13px "JetBrains Mono Variable"'); } catch {}
     term.open($('terminal'));
     termOpened = true;
     term.onData((data) => {
+      if (replaying) return;
       if (app.terminalExited) {
         if (data === '\r') { app.terminalExited = false; send({ type: 'term-restart', cols: term.cols, rows: term.rows }); }
         return;
@@ -1092,13 +1137,18 @@ function fitTerminal() {
   try { fitAddon.fit(); } catch {}
 }
 handlers['term-out'] = (m) => { term.write(m.data); app.lastTermOut = Date.now(); };
-handlers['term-replay'] = (m) => { term.reset(); term.write(m.data); };
+handlers['term-replay'] = (m) => {
+  term.reset();
+  replaying = true;
+  term.write(m.data, () => { replaying = false; });
+};
 handlers['term-reset'] = () => term.reset();
 handlers['term-started'] = () => { app.terminalExited = false; app.terminalStartedAt = Date.now(); };
 handlers['term-exit'] = () => {
   app.terminalExited = true;
-  term.write('\r\n\x1b[38;2;214;166;79mClaude exited. Press Enter to start a new session.\x1b[0m\r\n');
+  term.write(`\r\n\x1b[38;2;214;166;79m${currentAgent().name} exited. Press Enter to start a new session.\x1b[0m\r\n`);
 };
+handlers['agent'] = (m) => { app.agent = m.agent; app.terminalExited = false; renderAgent(); };
 
 function setClaudeOpen(open) {
   app.claudeOpen = open;
@@ -1276,14 +1326,15 @@ document.querySelector('.topbar').addEventListener('dblclick', (e) => {
 
 handlers.init = async (m) => {
   const first = !app.root;
-  Object.assign(app, { root: m.root, name: m.name, files: m.files, main: m.main, texpresso: m.texpresso });
+  Object.assign(app, { root: m.root, name: m.name, files: m.files, main: m.main, texpresso: m.texpresso, agents: m.agents, agent: m.agent });
+  renderAgent();
   document.title = `underleaf-window:${winKey}`;
   send({ type: 'window-hello', key: winKey });
   clearTimeout(titleTimer);
   titleTimer = setTimeout(() => { document.title = `${m.name} — Underleaf`; }, 8000);
   $('project-name').textContent = m.name;
   $('project-name').title = m.root;
-  $('btn-live').hidden = !m.texpresso;
+  showLiveButton();
   renderTree();
   loadCitations();
   if (first) marks.load(store.get(`highlights:${m.root}`, []));
@@ -1302,7 +1353,6 @@ handlers.init = async (m) => {
   if (m.compiling) handlers['compile-start']();
   if (m.compile) onCompileDone(m.compile);
   handlers['live-state']({ running: m.live });
-  if (!m.claude) $('claude-title').textContent = 'Terminal (claude not found)';
   app.terminalStarted = false;
   setClaudeOpen(app.claudeOpen);
 };

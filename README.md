@@ -15,8 +15,11 @@ before/after you can keep or undo.
 - **Node 20 or newer**, plus `build-essential` and `python3` (the Claude terminal compiles a native module).
 - **[Tectonic](https://tectonic-typesetting.github.io/en-US/install.html)** on your PATH — the LaTeX engine.
 - **Chrome or Chromium** — the app opens in its own window. Any Chromium-based browser works.
-- **Optional: [Claude Code](https://claude.com/claude-code)** (`claude` on your PATH) for the Claude panel.
-  Without it that panel just runs your shell.
+- **Optional: [Claude Code](https://claude.com/claude-code)** (`claude` on your PATH) and/or
+  [Codex](https://github.com/openai/codex) (`codex` on your PATH) for the agent panel. With neither, that panel
+  just runs your shell.
+- **Optional: [pandoc](https://pandoc.org/installing.html) 2.11 or newer** to write in Markdown instead of LaTeX.
+  `sudo apt install pandoc` is new enough on Ubuntu 24.04; on older releases use the `.deb` from pandoc's site.
 
 ## Install
 
@@ -34,6 +37,7 @@ creates an app-menu entry. To run it without installing anything globally: `npm 
 ```
 underleaf ~/papers/thesis        # a project folder (the main file is detected)
 underleaf ~/papers/note.tex      # a specific main file (created from a template if missing)
+underleaf ~/notes/draft.md       # a Markdown main file (also created if missing)
 underleaf                        # the current folder
 ```
 
@@ -57,7 +61,8 @@ It compiles MuPDF and TeXpresso into `~/.local/share/underleaf/deps` (a few minu
 - **Editor**: CodeMirror 6 with LaTeX highlighting, autocomplete for commands, environments, `\ref` labels and `\cite` keys from your `.bib` files. Edits autosave to disk.
 - **PDF preview**: recompiles with [Tectonic](https://tectonic-typesetting.github.io) as you type; a short document is back on screen about a second after a keystroke. Errors show in the gutter and in the error list; click one to jump to it.
 - **Live mode** (`Live` button, `Ctrl+Shift+L`): [TeXpresso](https://github.com/let-def/texpresso) docks its window over the preview and re-renders on every keystroke, typically within a few hundred milliseconds.
-- **Claude Code**: the real `claude` CLI, running in the project folder. It knows it is inside Underleaf, and anything it changes on disk reloads in the editor and recompiles right away.
+- **Markdown**: a `.md` file can be the main document too (`underleaf draft.md`, or **set main** in the file list). pandoc turns it into LaTeX and Tectonic compiles that, so the preview, error list, highlights and Claude all work the same. You write [pandoc Markdown](https://pandoc.org/MANUAL.html#pandoc-s-markdown): `$math$`, raw LaTeX such as `\newpage`, `[@key]` citations with `bibliography: refs.bib` in the YAML header, and `title`/`author`/`geometry` there too. Jumping between the PDF and the source lands on the right block, usually the right line. Live mode is LaTeX-only. A folder with no `.tex` file at all opens its Markdown (`main.md`, `index.md`, else the least-nested `.md`).
+- **Claude Code or Codex**: the real `claude` or `codex` CLI, running in the project folder. It knows it is inside Underleaf, and anything it changes on disk reloads in the editor and recompiles right away. The switch in the panel's header flips between the two; each keeps its own session running, and the project remembers which one you used last. Labels, Ask (`Ctrl+K`) and the chips all follow the switch.
 
 ## Keys
 
