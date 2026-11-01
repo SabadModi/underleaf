@@ -10,29 +10,82 @@ before/after you can keep or undo.
 
 ## Requirements
 
-- **Linux with X11** for everything. macOS and Wayland: the editor, PDF preview, review panel and Claude
-  panel work, but live mode and the window buttons in the header are X11-only.
-- **Node 20 or newer**, plus `build-essential` and `python3` (the Claude terminal compiles a native module).
+On every platform you need:
+
+- **Node 20 or newer**.
 - **[Tectonic](https://tectonic-typesetting.github.io/en-US/install.html)** on your PATH — the LaTeX engine.
-- **Chrome or Chromium** — the app opens in its own window. Any Chromium-based browser works.
+- **Chrome or Chromium** — the app opens in its own window. Any Chromium-based browser works, including the
+  Edge that comes with Windows.
 - **Optional: [Claude Code](https://claude.com/claude-code)** (`claude` on your PATH) and/or
   [Codex](https://github.com/openai/codex) (`codex` on your PATH) for the agent panel. With neither, that panel
   just runs your shell.
 - **Optional: [pandoc](https://pandoc.org/installing.html) 2.11 or newer** to write in Markdown instead of LaTeX.
-  `sudo apt install pandoc` is new enough on Ubuntu 24.04; on older releases use the `.deb` from pandoc's site.
+
+What works where:
+
+| | Linux (X11) | Linux (Wayland), macOS | Windows 10/11 (experimental) |
+|---|---|---|---|
+| Editor, PDF preview, review panel, agent panel | Yes | Yes | Should work, not tested yet |
+| Live mode | Yes | No | No |
+| Window buttons in the header | Yes | No | No |
 
 ## Install
 
+### Linux
+
 ```
+sudo apt install build-essential python3    # Debian/Ubuntu: the terminal compiles a native module
 git clone https://github.com/SabadModi/underleaf.git
 cd underleaf
 ./scripts/install.sh
 ```
 
 That installs dependencies, builds the front end, adds an `underleaf` command to `~/.local/bin`, and
-creates an app-menu entry. To run it without installing anything globally: `npm install && npm start`.
+creates an app-menu entry.
+
+For Markdown, `sudo apt install pandoc` is new enough on Ubuntu 24.04; on older releases use the `.deb` from
+pandoc's site.
+
+### macOS
+
+```
+xcode-select --install    # the terminal compiles a native module
+git clone https://github.com/SabadModi/underleaf.git
+cd underleaf
+./scripts/install.sh
+```
+
+That installs dependencies, builds the front end and adds an `underleaf` command to `~/.local/bin`. Chrome
+isn't on your PATH on macOS, so Underleaf prints a URL for you to open. To get its own window instead, add
+this to your shell profile:
+
+```
+export UNDERLEAF_BROWSER="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+```
+
+### Windows
+
+Windows support is new and hasn't been run on a real Windows machine yet, so expect rough edges. From
+PowerShell:
+
+```
+git clone https://github.com/SabadModi/underleaf.git
+cd underleaf
+npm run setup:windows
+```
+
+That installs dependencies, builds the front end and adds `bin\` to your user PATH, so open a new terminal
+afterwards. There is no Start menu entry, so start it from a terminal.
+
+For the Linux setup on Windows instead, follow the Linux steps inside WSL2.
+
+### Without installing
+
+On any platform, run `npm install`, then `npm start`.
 
 ## Run
+
+Linux and macOS:
 
 ```
 underleaf ~/papers/thesis        # a project folder (the main file is detected)
@@ -41,7 +94,16 @@ underleaf ~/notes/draft.md       # a Markdown main file (also created if missing
 underleaf                        # the current folder
 ```
 
-## Optional: live preview
+Windows:
+
+```
+underleaf C:\papers\thesis
+underleaf C:\papers\note.tex
+underleaf C:\notes\draft.md
+underleaf
+```
+
+## Optional: live preview (Linux with X11)
 
 The **Live** button re-renders on every keystroke using TeXpresso, which is built from source (no sudo,
 nothing installed system-wide):
@@ -91,7 +153,7 @@ Build output lives in `<project>/.underleaf/` (git-ignored automatically): the P
 
 - `server.js`: Node server on 127.0.0.1 with a random port and access token. Runs Tectonic, parses errors and SyncTeX, watches the folder, hosts the `claude` terminal (node-pty) and drives TeXpresso over its JSON protocol.
 - `src/`: the browser app (CodeMirror, pdf.js, xterm.js), bundled by `node build.mjs` into `public/assets/`.
-- `bin/underleaf`: launcher; opens a Chrome/Chromium `--app` window with its own profile.
+- `bin/underleaf`, `bin/underleaf.cmd`: launchers; the app opens in a Chrome/Chromium `--app` window with its own profile.
 - `bin/x11-window.py`: tiny X11 helper behind the header's minimize/maximize/close buttons (the system title bar is removed; start with `--titlebar` to keep it) and the focus hand-back from TeXpresso's window.
 
 ## Live mode build

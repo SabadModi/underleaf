@@ -14,6 +14,7 @@ import { WebSocketServer } from 'ws';
 import { watch } from 'chokidar';
 import pty from 'node-pty';
 import { isMarkdown, buildMarkdown } from './lib/markdown.js';
+import { findCommand, launchCommand } from './lib/commands.js';
 
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(APP_DIR, 'public');
@@ -73,7 +74,7 @@ function pickTarget(parts) {
 }
 
 function resolveProject(target) {
-  if (!target && [os.homedir(), '/'].includes(process.cwd())) {
+  if (!target && [os.homedir(), path.parse(process.cwd()).root].includes(process.cwd())) {
     console.error('underleaf: run it inside a LaTeX project folder, or pass one, e.g.  underleaf ~/papers/thesis');
     process.exit(1);
   }
@@ -112,12 +113,7 @@ const saveState = () => fs.writeFile(STATE_FILE, JSON.stringify(state, null, 2),
 // ---------------------------------------------------------------- binaries
 
 function which(name, extra = []) {
-  const dirs = [...(process.env.PATH || '').split(':'), path.join(os.homedir(), '.local/bin'), ...extra];
-  for (const d of dirs) {
-    const p = path.join(d, name);
-    try { fs.accessSync(p, fs.constants.X_OK); return p; } catch {}
-  }
-  return null;
+  return findCommand(name, [...(process.env.PATH || '').split(path.delimiter), path.join(os.homedir(), '.local/bin'), ...extra]);
 }
 const TECTONIC = process.env.UNDERLEAF_TECTONIC || which('tectonic', [path.join(os.homedir(), '.cargo/bin')]);
 const PANDOC = process.env.UNDERLEAF_PANDOC || which('pandoc');
@@ -330,7 +326,7 @@ function sourceFor(name, line, map) {
 function parseTectonicErrors(output, map) {
   const seen = new Set();
   const list = [];
-  for (const line of output.split('\n')) {
+  for (const line of output.split(/\r?\n/)) {
     let m = line.match(/^(error|warning): (.+?):(\d+): (.*)$/);
     if (m) {
       const key = m.slice(1).join('|');
@@ -353,7 +349,7 @@ function parseTectonicErrors(output, map) {
 function parseLogWarnings(map) {
   let log;
   try { log = fs.readFileSync(outBase() + '.log', 'utf8'); } catch { return []; }
-  const lines = log.split('\n');
+  const lines = log.split(/\r?\n/);
   const stack = [];
   const out = [];
   const seen = new Set();
@@ -418,7 +414,7 @@ function loadSynctex() {
   const lineBoxes = [];
   let unit = 1, cur = null, lines = null, stack = [], content = false;
   const recRe = /^([[(hvxkg$r])(\d+),(\d+):(-?\d+),(-?\d+)(?::(-?\d+)(?:,(-?\d+),(-?\d+))?)?/;
-  for (const L of text.split('\n')) {
+  for (const L of text.split(/\r?\n/)) {
     if (L.startsWith('Input:')) {
       const m = L.match(/^Input:(\d+):(.*)$/);
       if (m && m[2]) inputs.set(+m[1], path.resolve(ROOT, m[2]));
@@ -581,12 +577,14 @@ function startTerminal(extraArgs = []) {
     file = agent.path;
     args = [...agent.args(AGENT_NOTE()), ...extraArgs];
   } else {
-    file = process.env.SHELL || '/bin/bash';
+    // Git Bash sets SHELL to a POSIX path that Windows itself can't start.
+    file = process.platform === 'win32' ? process.env.ComSpec || 'cmd.exe' : process.env.SHELL || '/bin/bash';
     args = [];
     session.buffer = `\x1b[33m${agent.command} was not found on PATH — starting a shell instead.\x1b[0m\r\n`;
   }
   try {
-    session.proc = pty.spawn(file, args, { name: 'xterm-256color', cols: term.cols, rows: term.rows, cwd: ROOT, env: childEnv() });
+    const run = launchCommand(file, args);
+    session.proc = pty.spawn(run.file, run.args, { name: 'xterm-256color', cols: term.cols, rows: term.rows, cwd: ROOT, env: childEnv() });
   } catch (err) {
     broadcast({ type: 'term-out', data: `\r\n\x1b[31mCould not start ${file}: ${err.message}\x1b[0m\r\n` });
     return;
@@ -1066,11 +1064,14 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 function openWindow(url) {
-  const browsers = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'brave-browser', 'microsoft-edge'];
-  const bin = process.env.UNDERLEAF_BROWSER || browsers.map((b) => which(b)).find(Boolean);
+  // Windows browsers aren't on PATH; they live under one of these folders.
+  const installed = (dir) => ['ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA'].filter((k) => process.env[k]).map((k) => path.join(process.env[k], dir, 'Application'));
+  const browsers = [['google-chrome'], ['google-chrome-stable'], ['chromium'], ['chromium-browser'], ['brave-browser'], ['microsoft-edge'],
+    ['chrome', installed('Google/Chrome')], ['msedge', installed('Microsoft/Edge')], ['brave', installed('BraveSoftware/Brave-Browser')]];
+  const bin = process.env.UNDERLEAF_BROWSER || browsers.map(([b, dirs]) => which(b, dirs)).find(Boolean);
   if (!bin) {
-    const xdg = which('xdg-open');
-    if (xdg) spawn(xdg, [url], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref();
+    const open = process.platform === 'win32' ? ['rundll32', 'url.dll,FileProtocolHandler'] : [which('xdg-open')];
+    if (open[0]) spawn(open[0], [...open.slice(1), url], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref();
     return;
   }
   const profile = path.join(DATA_DIR, 'chrome-profile');

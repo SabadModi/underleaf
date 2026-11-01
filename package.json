@@ -35,6 +35,7 @@
     "test": "node --test",
     "postinstall": "node build.mjs",
     "setup": "bash scripts/install.sh",
+    "setup:windows": "powershell -ExecutionPolicy Bypass -File scripts/install.ps1",
     "texpresso": "bash scripts/build-texpresso.sh"
   },
   "dependencies": {
