@@ -2,7 +2,7 @@
   "name": "underleaf",
   "version": "0.1.0",
   "private": true,
-  "description": "A local Overleaf: LaTeX editor with live PDF preview and Claude Code built in",
+  "description": "A local Overleaf: LaTeX and Markdown editor with live PDF preview and Claude Code or Codex built in",
   "license": "MIT",
   "author": "Sabad Modi",
   "homepage": "https://github.com/SabadModi/underleaf",
@@ -12,6 +12,8 @@
   },
   "keywords": [
     "latex",
+    "markdown",
+    "pandoc",
     "overleaf",
     "tectonic",
     "texpresso",
@@ -30,6 +32,7 @@
   "scripts": {
     "build": "node build.mjs",
     "start": "node server.js",
+    "test": "node --test",
     "postinstall": "node build.mjs",
     "setup": "bash scripts/install.sh",
     "texpresso": "bash scripts/build-texpresso.sh"
@@ -42,6 +45,7 @@
   "devDependencies": {
     "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/language": "^6.12.4",
     "@codemirror/legacy-modes": "^6.5.4",
     "@codemirror/lint": "^6.9.7",

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# underleaf [project-folder | file.tex] [--keep] [--no-open] [--port N]
+# underleaf [project-folder | file.tex | file.md] [--keep] [--no-open] [--port N]
 # Opens a local Overleaf-style editor for the project (defaults to the current folder).
 set -euo pipefail
 APP_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
